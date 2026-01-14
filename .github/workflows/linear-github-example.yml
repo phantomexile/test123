@@ -1,0 +1,36 @@
+name: Example Linear & GitHub Integration
+
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  create-linear-issue:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create matching Linear issue
+        env:
+           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+  LINEAR_TEAM_ID: ${{ secrets.LINEAR_TEAM_ID }}
+  GH_ISSUE_TITLE: ${{ github.event.issue.title }}
+  GH_ISSUE_NUMBER: ${{ github.event.issue.number }}
+  GH_ISSUE_URL: ${{ github.event.issue.html_url }}
+        run: |
+          cat << 'GRAPHQL' > mutation.json
+          {
+            "query": "mutation IssueCreate($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id identifier url } } }",
+            "variables": {
+              "input": {
+                "title": "GitHub #${GH_ISSUE_NUMBER}: ${GH_ISSUE_TITLE}",
+                "description": "Created automatically from GitHub issue #${GH_ISSUE_NUMBER} (${GH_ISSUE_URL})",
+                "teamId": "${LINEAR_TEAM_ID}"
+              }
+            }
+          }
+          GRAPHQL
+
+          curl -sS https://api.linear.app/graphql \
+            -H "Content-Type: application/json" \
+            -H "Authorization: ${LINEAR_API_KEY}" \
+            -d @mutation.json
+
