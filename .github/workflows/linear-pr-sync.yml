@@ -1,0 +1,64 @@
+name: Linear & GitHub PR Sync
+
+on:
+  pull_request:
+    types: [opened]
+
+jobs:
+  sync-pr-to-linear:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create Linear issue for PR and comment back
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_TEAM_ID: ${{ secrets.LINEAR_TEAM_ID }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          # Build Linear GraphQL mutation payload
+          cat << 'GRAPHQL' > mutation.json
+          {
+            "query": "mutation IssueCreate($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id identifier url } } }",
+            "variables": {
+              "input": {
+                "title": "PR #${PR_NUMBER}: ${PR_TITLE}",
+                "description": "Created automatically from GitHub pull request #${PR_NUMBER} (${PR_URL})\n\nPR body:\n${PR_BODY}",
+                "teamId": "${LINEAR_TEAM_ID}"
+              }
+            }
+          }
+          GRAPHQL
+
+          echo "Creating Linear issue for PR #${PR_NUMBER}..."
+
+          # Call Linear API and capture response
+          curl -sS https://api.linear.app/graphql \
+            -H "Content-Type: application/json" \
+            -H "Authorization: ${LINEAR_API_KEY}" \
+            -d @mutation.json > linear_response.json
+
+          echo "Linear API response:"
+          cat linear_response.json
+
+          # Extract Linear issue identifier and URL (requires jq, available on ubuntu-latest)
+          LINEAR_IDENTIFIER=$(jq -r '.data.issueCreate.issue.identifier // empty' linear_response.json)
+          LINEAR_URL=$(jq -r '.data.issueCreate.issue.url // empty' linear_response.json)
+
+          if [ -n "$LINEAR_IDENTIFIER" ] && [ -n "$LINEAR_URL" ]; then
+            COMMENT_BODY="Linked Linear issue: ${LINEAR_IDENTIFIER} (${LINEAR_URL})"
+          else
+            COMMENT_BODY="A Linear issue was attempted for this PR, but the response could not be parsed. Please check Linear manually."
+          fi
+
+          echo "Adding PR comment with Linear link..."
+
+          curl -sS -X POST \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments \
+            -d "$(jq -n --arg body "$COMMENT_BODY" '{body: $body}')"
+
